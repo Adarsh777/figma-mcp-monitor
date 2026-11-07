@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 const root = dirname(fileURLToPath(import.meta.url));
 const demo = process.argv.includes('--demo') || process.env.MONITOR_DEMO === '1';
 const dashboardOnly = process.argv.includes('--dashboard-only');
-const noDashboard = process.argv.includes('--no-dashboard') || process.env.MONITOR_NO_DASHBOARD === '1';
+const noDashboard = !process.argv.includes('--with-dashboard') && process.env.MONITOR_WITH_DASHBOARD !== '1';
 const port = Number(process.env.MONITOR_PORT || 4179);
 const upstreamUrl = process.env.FIGMA_MCP_URL || 'http://127.0.0.1:3845/mcp';
 const logPath = process.env.MONITOR_LOG_PATH || join(root, 'data', 'calls.jsonl');
