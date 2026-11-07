@@ -1,13 +1,16 @@
 {
   "name": "figma-mcp-monitor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node src.mjs",
     "demo": "node src.mjs --demo",
     "smoke": "node smoke.mjs",
-    "dashboard": "node src.mjs --dashboard-only"
+    "dashboard": "node src.mjs --dashboard-only",
+    "dashboard:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/start-dashboard.ps1",
+    "startup:install": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-startup.ps1",
+    "startup:remove": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-startup.ps1 -Remove"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
