@@ -4,7 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createServer } from 'node:http';
-import { readFile, appendFile, mkdir } from 'node:fs/promises';
+import { readFile, appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -12,18 +12,41 @@ import { randomUUID } from 'node:crypto';
 const root = dirname(fileURLToPath(import.meta.url));
 const demo = process.argv.includes('--demo') || process.env.MONITOR_DEMO === '1';
 const dashboardOnly = process.argv.includes('--dashboard-only');
+const noDashboard = !process.argv.includes('--with-dashboard') && process.env.MONITOR_WITH_DASHBOARD !== '1';
 const port = Number(process.env.MONITOR_PORT || 4179);
 const upstreamUrl = process.env.FIGMA_MCP_URL || 'http://127.0.0.1:3845/mcp';
 const logPath = process.env.MONITOR_LOG_PATH || join(root, 'data', 'calls.jsonl');
+const runtimePath = process.env.MONITOR_RUNTIME_PATH || join(root, 'data', 'proxy-state.json');
 const clientLabel = process.env.MONITOR_CLIENT || 'Claude Code';
 const allowance = Math.max(1, Number(process.env.MONITOR_LIMIT || 200));
 const timezone = process.env.MONITOR_TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 let upstream;
 let upstreamStatus = dashboardOnly ? 'not_checked' : demo ? 'demo' : 'connecting';
 let proxyStatus = dashboardOnly ? 'dashboard_only' : 'starting';
+let heartbeatTimer;
 let lastUpstreamError = null;
 
 function diagnostic(...args) { console.error('[figma-mcp-monitor]', ...args); }
+async function publishProxyState() {
+  try {
+    await mkdir(dirname(runtimePath), {recursive:true});
+    await writeFile(runtimePath, JSON.stringify({pid:process.pid,updatedAt:new Date().toISOString(),proxy:proxyStatus,upstream:upstreamStatus,lastUpstreamError}));
+  } catch (e) { diagnostic('Proxy heartbeat error:', e.message); }
+}
+async function getHealth() {
+  if (!dashboardOnly) return {proxy:proxyStatus,upstream:upstreamStatus,lastUpstreamError,serverTime:new Date().toISOString()};
+  try {
+    const state = JSON.parse(await readFile(runtimePath,'utf8'));
+    const age = Date.now()-new Date(state.updatedAt).getTime();
+    if (!Number.isFinite(age) || age > 15000 || age < -5000) return {proxy:'offline',upstream:'unknown',lastUpstreamError:null,serverTime:new Date().toISOString()};
+    return {proxy:state.proxy,upstream:state.upstream,lastUpstreamError:state.lastUpstreamError,serverTime:new Date().toISOString()};
+  } catch { return {proxy:'offline',upstream:'unknown',lastUpstreamError:null,serverTime:new Date().toISOString()}; }
+}
+function startHeartbeat() {
+  void publishProxyState();
+  heartbeatTimer=setInterval(()=>void publishProxyState(),5000);
+  heartbeatTimer.unref();
+}
 async function loadEvents() {
   try { return (await readFile(logPath, 'utf8')).split('\n').filter(Boolean).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }); }
   catch (e) { if (e.code === 'ENOENT') return []; throw e; }
@@ -37,7 +60,7 @@ function quotaCategory(source, tool) {
   if (['create_new_file', 'generate_figma_design'].includes(tool)) return 'documented_exempt';
   return 'unknown';
 }
-function summarize(events) {
+function summarize(events, health) {
   const today = localDate(new Date().toISOString());
   const todayEvents = events.filter(e => localDate(e.at) === today);
   const real = todayEvents.filter(e => e.source !== 'demo');
@@ -52,7 +75,7 @@ function summarize(events) {
   for(const e of events.filter(e=>e.source!=='demo')){const d=localDate(e.at);byDay.set(d,(byDay.get(d)||0)+1);}
   const days = [...byDay].sort((a,b)=>a[0].localeCompare(b[0])).slice(-14).map(([day,count])=>({day,count}));
   return {
-    version:'0.2.0', demo, mode: dashboardOnly?'dashboard_only':demo?'demo':'figma_desktop',
+    version:'0.3.0', demo, mode: dashboardOnly?'dashboard_only':demo?'demo':'figma_desktop',
     client:clientLabel, timezone, today,
     configuredDailyLimit:allowance,
     observedFigmaCallsToday:real.length,
@@ -62,7 +85,7 @@ function summarize(events) {
     estimate:{remaining:null,reason:'There is no authoritative quota balance, and activity outside this proxy is not observable.'},
     perTool:[...perTool.values()].sort((a,b)=>b.count-a.count), days,
     events:events.slice(-200).reverse(),
-    health:{proxy:proxyStatus,upstream:upstreamStatus,lastUpstreamError,serverTime:new Date().toISOString()}
+    health
   };
 }
 const demoTools = [{name:'demo_figma_read',description:'Test MCP call logging without contacting Figma.',inputSchema:{type:'object',properties:{message:{type:'string'}},additionalProperties:false}}];
@@ -91,12 +114,12 @@ async function startDashboard(){
       const u=new URL(req.url,`http://localhost:${port}`);
       if(req.method!=='GET'){res.writeHead(405);res.end('Method not allowed');return;}
       if(u.pathname==='/api/usage'){
-        const response=summarize(await loadEvents());
+        const response=summarize(await loadEvents(), await getHealth());
         res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(response));return;
       }
       if(u.pathname==='/api/health'){
         res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
-        res.end(JSON.stringify({proxy:proxyStatus,upstream:upstreamStatus,lastUpstreamError}));return;
+        res.end(JSON.stringify(await getHealth()));return;
       }
       if(u.pathname==='/'||u.pathname==='/index.html'){
         res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
@@ -110,7 +133,7 @@ async function startDashboard(){
 }
 async function main(){
   if (!dashboardOnly && !demo) {
-    upstream=new Client({name:'figma-mcp-monitor-upstream',version:'0.2.0'});
+    upstream=new Client({name:'figma-mcp-monitor-upstream',version:'0.3.0'});
     try{
       await upstream.connect(new StreamableHTTPClientTransport(new URL(upstreamUrl)));
       const toolList=await upstream.listTools();
@@ -118,13 +141,14 @@ async function main(){
       diagnostic(`Connected to Figma Desktop MCP: ${toolList.tools.length} tool(s).`);
     }catch(e){upstreamStatus='disconnected';lastUpstreamError=e.message;throw e;}
   }
-  await startDashboard();
+  if(!noDashboard || dashboardOnly) await startDashboard();
   if(dashboardOnly){diagnostic('Dashboard-only mode (cannot record direct MCP calls).');return;}
-  const server=new Server({name:'figma-mcp-monitor',version:'0.2.0'},{capabilities:{tools:{}}});
+  const server=new Server({name:'figma-mcp-monitor',version:'0.3.0'},{capabilities:{tools:{}}});
   server.setRequestHandler(ListToolsRequestSchema,async()=>listTools());
   server.setRequestHandler(CallToolRequestSchema,callTool);
   await server.connect(new StdioServerTransport());
   proxyStatus='connected';
+  startHeartbeat();
   diagnostic(`MCP stdio proxy ready (${demo?'DEMO':'FIGMA DESKTOP'} mode).`);
 }
 main().catch(e=>{diagnostic('Startup failed:',e.stack||e.message);process.exitCode=1;});

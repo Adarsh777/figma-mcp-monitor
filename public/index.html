@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Figma MCP Monitor v0.2</title>
+<title>Figma MCP Monitor v0.3</title>
 <style>
 :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#0b1020;color:#edf1ff}
 *{box-sizing:border-box}body{margin:0}.wrap{max-width:1120px;margin:auto;padding:42px 26px}
@@ -33,7 +33,7 @@ select{background:#202a44;color:#e4eaf9;border:1px solid #3a486b;padding:8px;bor
 @media(max-width:540px){header{flex-direction:column}.grid{grid-template-columns:1fr}.wrap{padding:24px 15px}}
 </style></head><body>
 <main class="wrap">
-<header><div><div class="eyebrow">LOCAL · MONITORED TRAFFIC ONLY</div><h1>Figma MCP Monitor <span class="tiny">v0.2</span></h1>
+<header><div><div class="eyebrow">LOCAL · MONITORED TRAFFIC ONLY</div><h1>Figma MCP Monitor <span class="tiny">v0.3</span></h1>
 <p class="sub">Claude Code · Windows · metadata-only activity</p></div><div class="pill" id="connection">Checking connection…</div></header>
 <section class="grid">
 <div class="card"><label>Observed Figma calls today</label><div class="num" id="total">—</div><div class="note">Real requests through this proxy</div></div>
@@ -49,7 +49,7 @@ select{background:#202a44;color:#e4eaf9;border:1px solid #3a486b;padding:8px;bor
 <section class="panel tablepanel"><div class="panelhead"><h2>Recent MCP tool calls</h2>
 <div class="filters"><select id="filter" aria-label="Filter calls"><option value="all">All calls</option><option value="figma">Figma only</option><option value="error">Errors</option><option value="demo">Demo</option></select><button id="refresh">Refresh</button></div></div>
 <div class="scroll"><table><thead><tr><th>Local time</th><th>Client</th><th>Tool</th><th>Result</th><th>Duration</th><th>Quota impact</th></tr></thead><tbody id="rows"><tr><td colspan="6">Loading…</td></tr></tbody></table></div></section>
-<div id="error" role="alert"></div><div class="footer">Auto-refresh every 3 seconds · Dashboard bound to 127.0.0.1 · Only metadata is logged, not prompts or document contents · Timezone: <span id="tzfooter">local</span></div>
+<div id="error" role="alert"></div><div class="footer">Auto-refresh every 3 seconds · Standalone dashboard · Dashboard bound to 127.0.0.1 · Only metadata is logged, not prompts or document contents · Timezone: <span id="tzfooter">local</span></div>
 </main>
 <script>
 let latest=null;
@@ -61,7 +61,7 @@ function render(){
  el('unknown').textContent=d.unknownQuotaImpactToday;
  el('limit').textContent=d.configuredDailyLimit;
  el('timezone').textContent='Timezone: '+d.timezone;el('tzfooter').textContent=d.timezone;
- el('connection').textContent=d.mode==='dashboard_only'?'● Dashboard only':d.demo?'● Demo mode':d.health.upstream==='connected'?'● Figma desktop connected':'● Figma desktop unavailable';
+ el('connection').textContent=d.health.proxy==='connected'&&d.health.upstream==='connected'?'● Figma proxy connected':d.health.proxy==='offline'?'● Proxy offline (dashboard active)':d.health.upstream==='demo'?'● Demo connection':d.health.upstream==='connected'?'● Proxy active':'● Figma upstream unavailable';
  const chart=el('chart');chart.replaceChildren();const max=Math.max(1,...d.days.map(x=>x.count));
  if(!d.days.length){chart.textContent='No real calls recorded yet';}
  for(const x of d.days){const w=document.createElement('div');w.className='barwrap';w.title=x.day+': '+x.count+' calls';const b=document.createElement('div');b.className='bar';b.style.height=Math.max(2,100*x.count/max)+'%';w.append(b);chart.append(w);}
